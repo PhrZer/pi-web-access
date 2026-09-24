@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Tool activation now verifies the running Pi installation instead of the `@earendil-works/*` packages installed beside the extension, and replays a transcript's recorded web-tool selection locally. A stale package-local peer no longer disables `web_enable` or leaves an outdated selection active after resume.
+
 ## [0.31.0] - 2026-09-22
 
 ### Highlights

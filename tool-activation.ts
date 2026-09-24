@@ -1,7 +1,6 @@
-import { buildSessionContext, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { buildSessionContext, VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
 import { dirname, join } from "node:path";
-import { readFileSync } from "node:fs";
-import { fileURLToPath } from "node:url";
 import { Type } from "typebox";
 
 export type WebCapability = "search" | "source-check" | "fetch" | "stored-content";
@@ -12,6 +11,8 @@ export interface WebActivationTool {
 }
 
 const LOADER_NAME = "web_enable";
+const PI_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
+const MINIMUM_DYNAMIC_TOOLS_VERSION = [0, 86, 1] as const;
 const CAPABILITY_LABELS: Record<WebCapability, string> = {
 	search: "web search",
 	"source-check": "source checking",
@@ -19,15 +20,61 @@ const CAPABILITY_LABELS: Record<WebCapability, string> = {
 	"stored-content": "stored-result retrieval",
 };
 
-function supportsDynamicTools(pi: ExtensionAPI): boolean {
-	if (typeof pi.getAllTools !== "function" || typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return false;
-	try {
-		const packagePath = join(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))), "..", "package.json");
-		const [major, minor, patch] = JSON.parse(readFileSync(packagePath, "utf8")).version.split(".").map(Number);
-		return major > 0 || minor > 86 || minor === 86 && patch >= 1;
-	} catch {
-		return false;
+function versionAtLeast(version: string, minimum: readonly [number, number, number]): boolean {
+	const parts = version.split(".").slice(0, 3).map(part => Number.parseInt(part, 10));
+	if (parts.length !== 3 || parts.some(part => !Number.isInteger(part) || part < 0)) return false;
+	for (let index = 0; index < 3; index += 1) {
+		if (parts[index] !== minimum[index]) return parts[index] > minimum[index];
 	}
+	return true;
+}
+
+function piVersionFrom(root: string | undefined): string | undefined {
+	if (!root) return undefined;
+	try {
+		const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+		return manifest?.name === PI_PACKAGE_NAME && typeof manifest.version === "string" ? manifest.version : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * Version of the Pi installation running this extension. The package installed next
+ * to this extension is not authoritative: a managed install can keep an older
+ * `@earendil-works/*` peer beside it, and both `import.meta.resolve` and the
+ * `VERSION` export read that copy. Walk up from the running entry point instead,
+ * and fall back to `VERSION` for compiled hosts whose entry point is virtual.
+ */
+function runningPiVersion(): string | undefined {
+	const entry = process.argv[1];
+	if (entry) {
+		try {
+			let directory = dirname(realpathSync(entry));
+			while (directory !== dirname(directory)) {
+				if (existsSync(join(directory, "package.json"))) {
+					const version = piVersionFrom(directory);
+					if (version) return version;
+				}
+				directory = dirname(directory);
+			}
+		} catch {
+			// Compiled hosts run a virtual entry point; the VERSION export covers them.
+		}
+	}
+	return piVersionFrom(process.env.PI_PACKAGE_DIR?.trim()) ?? (typeof VERSION === "string" ? VERSION : undefined);
+}
+
+function unsupportedDynamicToolsReason(pi: ExtensionAPI): string | undefined {
+	if (typeof pi.getAllTools !== "function" || typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") {
+		return "requires Pi 0.86.1 or newer";
+	}
+	// The tool-selection methods exist since 0.85, so their presence is necessary but
+	// not sufficient: restoring a transcript's recorded selection needs the 0.86.1
+	// tool deltas. Only the running installation can confirm that.
+	const version = runningPiVersion();
+	if (version === undefined) return "could not verify the running Pi installation";
+	return versionAtLeast(version, MINIMUM_DYNAMIC_TOOLS_VERSION) ? undefined : `requires Pi 0.86.1 or newer (running ${version})`;
 }
 
 function hasToolDeclarations(messages: unknown[]): boolean {
@@ -36,16 +83,34 @@ function hasToolDeclarations(messages: unknown[]): boolean {
 	));
 }
 
-async function currentTranscriptToolNames(messages: unknown[]): Promise<string[]> {
-	const moduleName = "@earendil-works/pi-ai/utils/transcript";
-	const { getCurrentTools } = await import(moduleName);
-	return getCurrentTools(messages).map((tool: { name: string }) => tool.name);
+type ToolSelectionMessage = {
+	role?: unknown;
+	toolsAdded?: readonly { name: string }[];
+	toolsRemoved?: readonly { name: string }[];
+};
+
+/**
+ * Replay the transcript's native tool-selection deltas locally. The
+ * `@earendil-works/pi-ai` transcript helper is not authoritative here: it resolves
+ * to the package installed next to this extension, which can predate the
+ * tool-selection API and would then fail to restore the recorded selection.
+ */
+function transcriptToolNames(messages: unknown[]): string[] {
+	const tools = new Map<string, { name: string }>();
+	for (const message of messages) {
+		if (!message || typeof message !== "object" || (message as ToolSelectionMessage).role !== "system") continue;
+		const system = message as ToolSelectionMessage;
+		for (const tool of system.toolsRemoved ?? []) tools.delete(tool.name);
+		for (const tool of system.toolsAdded ?? []) tools.set(tool.name, tool);
+	}
+	return [...tools.keys()];
 }
 
 export function registerWebToolActivation(pi: ExtensionAPI, tools: ReadonlyArray<WebActivationTool>): void {
 	if (tools.length === 0) return;
-	if (!supportsDynamicTools(pi)) {
-		console.warn("[pi-web-access] Dynamic tool activation requires Pi 0.86.1 or newer; web tools remain eagerly available.");
+	const unsupportedReason = unsupportedDynamicToolsReason(pi);
+	if (unsupportedReason) {
+		console.warn(`[pi-web-access] Dynamic tool activation ${unsupportedReason}; web tools remain eagerly available.`);
 		return;
 	}
 	const names = tools.map(tool => tool.name);
@@ -100,12 +165,12 @@ export function registerWebToolActivation(pi: ExtensionAPI, tools: ReadonlyArray
 	}
 
 	let warned = false;
-	async function selectFromSession(ctx: ExtensionContext): Promise<void> {
+	function selectFromSession(ctx: ExtensionContext): void {
 		if (!loaderAvailable()) return;
 		try {
 			const messages = buildSessionContext(ctx.sessionManager.getBranch()).messages;
 			const recorded = hasToolDeclarations(messages)
-				? new Set(await currentTranscriptToolNames(messages))
+				? new Set(transcriptToolNames(messages))
 				: messages.length > 0
 					? new Set(names)
 					: new Set<string>();
