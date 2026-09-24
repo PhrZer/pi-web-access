@@ -1,20 +1,24 @@
 import assert from "node:assert/strict";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { createModels, fauxAssistantMessage, fauxProvider, fauxToolCall, getCurrentTools, getSystemMessageText } from "@earendil-works/pi-ai";
 import { createAgentSession, DefaultResourceLoader, SessionManager } from "@earendil-works/pi-coding-agent";
 
 const extensionPath = new URL("../index.ts", import.meta.url).pathname;
+const sdkPackageDir = dirname(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))));
 const root = mkdtempSync(join(tmpdir(), "pi-web-access-sdk-"));
 
 async function runNative(config = {}) {
 	writeFileSync(join(root, "web-search.json"), JSON.stringify(config), "utf8");
 	const previousAgentDir = process.env.PI_CODING_AGENT_DIR;
 	const previousFauxKey = process.env.FAUX_API_KEY;
+	const previousPackageDir = process.env.PI_PACKAGE_DIR;
 	process.env.PI_CODING_AGENT_DIR = root;
 	process.env.FAUX_API_KEY = "test";
+	process.env.PI_PACKAGE_DIR = sdkPackageDir;
 	try {
 		const faux = fauxProvider();
 		const models = createModels();
@@ -65,6 +69,8 @@ async function runNative(config = {}) {
 		else process.env.PI_CODING_AGENT_DIR = previousAgentDir;
 		if (previousFauxKey === undefined) delete process.env.FAUX_API_KEY;
 		else process.env.FAUX_API_KEY = previousFauxKey;
+		if (previousPackageDir === undefined) delete process.env.PI_PACKAGE_DIR;
+		else process.env.PI_PACKAGE_DIR = previousPackageDir;
 	}
 }
 

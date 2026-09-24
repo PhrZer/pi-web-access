@@ -3,13 +3,16 @@ import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { test } from "node:test";
+import { fileURLToPath } from "node:url";
 import { Value } from "typebox/value";
 
 import initializeExtension from "../index.ts";
 
 const indexUrl = new URL("../index.ts", import.meta.url).href;
+const sdkPackageDir = dirname(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))));
+process.env.PI_PACKAGE_DIR = sdkPackageDir;
 const indexSrc = readFileSync(new URL("../index.ts", import.meta.url), "utf8");
 const readmeSrc = readFileSync(new URL("../README.md", import.meta.url), "utf8");
 
@@ -38,7 +41,7 @@ function runRegistrationWithConfig(configText) {
 			console.log(JSON.stringify({ tools, commands }));
 		`,
 		encoding: "utf8",
-		env: { ...process.env, PI_CODING_AGENT_DIR: root, XDG_CONFIG_HOME: "", HOME: join(root, "home"), USERPROFILE: join(root, "home") },
+		env: { ...process.env, PI_CODING_AGENT_DIR: root, PI_PACKAGE_DIR: sdkPackageDir, XDG_CONFIG_HOME: "", HOME: join(root, "home"), USERPROFILE: join(root, "home") },
 	});
 }
 

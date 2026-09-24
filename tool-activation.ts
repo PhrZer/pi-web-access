@@ -20,13 +20,15 @@ const CAPABILITY_LABELS: Record<WebCapability, string> = {
 	"stored-content": "stored-result retrieval",
 };
 
-function versionAtLeast(version: string, minimum: readonly [number, number, number]): boolean {
-	const parts = version.split(".").slice(0, 3).map(part => Number.parseInt(part, 10));
-	if (parts.length !== 3 || parts.some(part => !Number.isInteger(part) || part < 0)) return false;
+export function versionAtLeast(version: string, minimum: readonly [number, number, number]): boolean {
+	const match = /^(\d+)\.(\d+)\.(\d+)([-+][0-9A-Za-z.-]*)?$/.exec(version.trim());
+	if (!match) return false;
+	const parts = [Number(match[1]), Number(match[2]), Number(match[3])];
 	for (let index = 0; index < 3; index += 1) {
 		if (parts[index] !== minimum[index]) return parts[index] > minimum[index];
 	}
-	return true;
+	// Build metadata does not affect precedence; a prerelease sorts below its release.
+	return match[4]?.startsWith("-") !== true;
 }
 
 function piVersionFrom(root: string | undefined): string | undefined {
@@ -39,12 +41,22 @@ function piVersionFrom(root: string | undefined): string | undefined {
 	}
 }
 
+declare const PI_BUNDLED_NODE: boolean | undefined;
+
+/** Compiled and bundled Pi hosts provide the Pi API as an in-memory module. */
+function hostApiInMemory(): boolean {
+	if (typeof (process.versions as { bun?: string }).bun === "string") return true;
+	if ((process as { features?: { sea?: boolean } }).features?.sea === true) return true;
+	return typeof PI_BUNDLED_NODE !== "undefined" && PI_BUNDLED_NODE === true;
+}
+
 /**
  * Version of the Pi installation running this extension. The package installed next
  * to this extension is not authoritative: a managed install can keep an older
  * `@earendil-works/*` peer beside it, and both `import.meta.resolve` and the
- * `VERSION` export read that copy. Walk up from the running entry point instead,
- * and fall back to `VERSION` for compiled hosts whose entry point is virtual.
+ * `VERSION` export then read that copy. Walk up from the running entry point
+ * instead, and accept `VERSION` only from an in-memory host module, where it cannot
+ * belong to a package sitting on disk.
  */
 function runningPiVersion(): string | undefined {
 	const entry = process.argv[1];
@@ -59,10 +71,14 @@ function runningPiVersion(): string | undefined {
 				directory = dirname(directory);
 			}
 		} catch {
-			// Compiled hosts run a virtual entry point; the VERSION export covers them.
+			// Compiled hosts run a virtual entry point; the in-memory module covers them.
 		}
 	}
-	return piVersionFrom(process.env.PI_PACKAGE_DIR?.trim()) ?? (typeof VERSION === "string" ? VERSION : undefined);
+	const override = piVersionFrom(process.env.PI_PACKAGE_DIR?.trim());
+	if (override) return override;
+	// A plain Node host whose entry point cannot be identified stays unverified
+	// rather than reading a version from the package beside the extension.
+	return hostApiInMemory() && typeof VERSION === "string" ? VERSION : undefined;
 }
 
 function unsupportedDynamicToolsReason(pi: ExtensionAPI): string | undefined {

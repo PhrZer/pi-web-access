@@ -1,8 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { dirname } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 const indexUrl = new URL("../index.ts", import.meta.url).href;
+const sdkPackageDir = dirname(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))));
 
 test("registers tool definitions and loads content extraction on first use", () => {
 	const child = spawnSync(process.execPath, ["--input-type=module"], {
@@ -10,6 +13,7 @@ test("registers tool definitions and loads content extraction on first use", () 
 		encoding: "utf8",
 		maxBuffer: 2 * 1024 * 1024,
 		timeout: 30_000,
+		env: { ...process.env, PI_PACKAGE_DIR: sdkPackageDir },
 	});
 
 	assert.equal(

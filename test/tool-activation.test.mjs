@@ -1,19 +1,22 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
+import { versionAtLeast } from "../tool-activation.ts";
 
 const indexUrl = new URL("../index.ts", import.meta.url).href;
+// The repository's own Pi SDK stands in for a running installation by default.
+const sdkPackageDir = dirname(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))));
 
-function run(config = {}, options = {}) {
-	const root = mkdtempSync(join(tmpdir(), "pi-web-access-activation-"));
-	writeFileSync(join(root, "web-search.json"), JSON.stringify(config), "utf8");
-	const child = spawnSync(process.execPath, ["--input-type=module"], {
-		input: `
+function childScript(options) {
+	return `
 			const { default: initializeExtension } = await import(${JSON.stringify(indexUrl)});
 			const options = ${JSON.stringify(options)};
+			const warnings = [];
+			console.warn = (...args) => warnings.push(args.join(" "));
 			if (options.stalePiAi) {
 				const { registerHooks } = await import("node:module");
 				registerHooks({
@@ -57,11 +60,29 @@ function run(config = {}, options = {}) {
 				registered: [...tools.keys()], before, after: active, result,
 				loader: loader && { description: loader.description, promptSnippet: loader.promptSnippet, parameters: loader.parameters },
 				definitions: [...tools.values()].map(({ name, description, parameters }) => ({ name, description, parameters })),
+				warnings,
 			}));
-		`,
-		encoding: "utf8",
-		env: { ...process.env, PI_CODING_AGENT_DIR: root, XDG_CONFIG_HOME: "", HOME: join(root, "home"), USERPROFILE: join(root, "home") },
-	});
+	`;
+}
+
+function run(config = {}, options = {}) {
+	const root = mkdtempSync(join(tmpdir(), "pi-web-access-activation-"));
+	writeFileSync(join(root, "web-search.json"), JSON.stringify(config), "utf8");
+	const env = { ...process.env, PI_CODING_AGENT_DIR: root, XDG_CONFIG_HOME: "", HOME: join(root, "home"), USERPROFILE: join(root, "home") };
+	if (options.hostPackageDir === null || options.hostVersion !== undefined) delete env.PI_PACKAGE_DIR;
+	else env.PI_PACKAGE_DIR = options.hostPackageDir ?? sdkPackageDir;
+	let child;
+	if (options.hostVersion !== undefined) {
+		// Run from inside a fake Pi installation so the entry point decides the version.
+		const hostRoot = mkdtempSync(join(tmpdir(), "pi-web-access-host-"));
+		mkdirSync(join(hostRoot, "dist", "bundle"), { recursive: true });
+		writeFileSync(join(hostRoot, "package.json"), JSON.stringify({ name: "@earendil-works/pi-coding-agent", version: options.hostVersion, type: "module" }));
+		const entry = join(hostRoot, "dist", "bundle", "cli.js");
+		writeFileSync(entry, childScript(options));
+		child = spawnSync(process.execPath, [entry], { encoding: "utf8", env });
+	} else {
+		child = spawnSync(process.execPath, ["--input-type=module"], { input: childScript(options), encoding: "utf8", env });
+	}
 	assert.equal(child.status, 0, child.stderr);
 	return JSON.parse(child.stdout);
 }
@@ -142,9 +163,37 @@ test("recorded selections restore when the package-local pi-ai is stale or absen
 	assert.deepEqual(warm.before.filter(name => defaultNames.includes(name)), ["web_search"]);
 	assert.ok(warm.before.includes("web_enable"));
 
+	assert.deepEqual(warm.warnings, []);
+
 	const removed = [...added, { role: "system", content: "", toolsRemoved: [{ name: "web_search" }], timestamp: 2 }];
 	const cold = run({}, { messages: removed, event: "session_tree", stalePiAi: true });
 	assert.deepEqual(cold.before.filter(name => defaultNames.includes(name)), []);
+});
+
+test("the running installation decides the version floor, not the package beside the extension", () => {
+	const unsupported = run({}, { hostVersion: "0.85.1" });
+	assert.deepEqual(unsupported.registered, [...defaultNames]);
+	assert.ok(unsupported.warnings.some(message => /running 0\.85\.1/.test(message)), JSON.stringify(unsupported.warnings));
+
+	const supported = run({}, { hostVersion: "0.87.1" });
+	assert.deepEqual(supported.registered, [...defaultNames, "web_enable"]);
+	assert.deepEqual(supported.warnings, []);
+});
+
+test("an unverifiable host keeps web tools eager instead of trusting the package beside the extension", () => {
+	const state = run({}, { hostPackageDir: null });
+	assert.deepEqual(state.registered, [...defaultNames]);
+	assert.ok(state.warnings.some(message => /could not verify the running Pi installation/.test(message)), JSON.stringify(state.warnings));
+});
+
+test("versionAtLeast rejects unparsable versions and prereleases of the floor", () => {
+	const floor = [0, 86, 1];
+	for (const version of ["0.86.1", "0.86.2", "0.87.0", "1.0.0", "0.87.1-rc.1", "0.86.1+build.5", " 0.86.1 "]) {
+		assert.equal(versionAtLeast(version, floor), true, version);
+	}
+	for (const version of ["0.86.0", "0.85.9", "0.86", "v0.87.1", "0.86.1-rc.1", "0.86.1garbage", ""]) {
+		assert.equal(versionAtLeast(version, floor), false, version);
+	}
 });
 
 test("legacy conversation without tool declarations preserves eager web tools", () => {
