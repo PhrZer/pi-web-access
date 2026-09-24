@@ -14,6 +14,19 @@ function run(config = {}, options = {}) {
 		input: `
 			const { default: initializeExtension } = await import(${JSON.stringify(indexUrl)});
 			const options = ${JSON.stringify(options)};
+			if (options.stalePiAi) {
+				const { registerHooks } = await import("node:module");
+				registerHooks({
+					resolve(specifier, context, nextResolve) {
+						if (specifier === "@earendil-works/pi-ai" || specifier.startsWith("@earendil-works/pi-ai/")) {
+							const error = new Error("Cannot find module '" + specifier + "'");
+							error.code = "ERR_MODULE_NOT_FOUND";
+							throw error;
+						}
+						return nextResolve(specifier, context);
+					},
+				});
+			}
 			const tools = new Map();
 			const handlers = new Map();
 			let active = ["read", "foreign_tool"];
@@ -121,6 +134,17 @@ test("cold and warm native transcript selections survive start and tree lifecycl
 	assert.deepEqual(warm.before.filter(name => defaultNames.includes(name)), ["web_search"]);
 	const reloaded = run({}, { messages: warmMessages, eventPayload: { type: "session_start", reason: "reload" } });
 	assert.deepEqual(reloaded.before.filter(name => defaultNames.includes(name)), ["web_search"]);
+});
+
+test("recorded selections restore when the package-local pi-ai is stale or absent", () => {
+	const added = [{ role: "system", content: "", toolsAdded: [{ name: "web_search", description: "", parameters: { type: "object" } }], timestamp: 1 }];
+	const warm = run({}, { messages: added, event: "session_tree", stalePiAi: true });
+	assert.deepEqual(warm.before.filter(name => defaultNames.includes(name)), ["web_search"]);
+	assert.ok(warm.before.includes("web_enable"));
+
+	const removed = [...added, { role: "system", content: "", toolsRemoved: [{ name: "web_search" }], timestamp: 2 }];
+	const cold = run({}, { messages: removed, event: "session_tree", stalePiAi: true });
+	assert.deepEqual(cold.before.filter(name => defaultNames.includes(name)), []);
 });
 
 test("legacy conversation without tool declarations preserves eager web tools", () => {
