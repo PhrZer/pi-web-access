@@ -2,10 +2,13 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 
 const indexUrl = new URL("../index.ts", import.meta.url).href;
+// The repository's own Pi SDK stands in for a running installation.
+const sdkPackageDir = dirname(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))));
 
 function run(config = {}, options = {}) {
 	const root = mkdtempSync(join(tmpdir(), "pi-web-access-activation-"));
@@ -47,7 +50,7 @@ function run(config = {}, options = {}) {
 			}));
 		`,
 		encoding: "utf8",
-		env: { ...process.env, PI_CODING_AGENT_DIR: root, XDG_CONFIG_HOME: "", HOME: join(root, "home"), USERPROFILE: join(root, "home") },
+		env: { ...process.env, PI_CODING_AGENT_DIR: root, PI_PACKAGE_DIR: sdkPackageDir, XDG_CONFIG_HOME: "", HOME: join(root, "home"), USERPROFILE: join(root, "home") },
 	});
 	assert.equal(child.status, 0, child.stderr);
 	return JSON.parse(child.stdout);
