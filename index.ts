@@ -179,6 +179,7 @@ interface WebSearchConfig {
 		allowedProviders?: unknown;
 	};
 	tools?: Partial<Record<keyof ToolNames, { enabled?: boolean }>>;
+	toolActivation?: unknown;
 	commands?: Partial<Record<"websearch" | "curator" | "search" | "google-account", { enabled?: boolean }>>;
 	toolNames?: Partial<ToolNames>;
 	shortcuts?: {
@@ -1069,6 +1070,10 @@ function handleSessionChange(ctx: ExtensionContext): void {
 export default function (pi: ExtensionAPI) {
 	const initConfig = loadConfigForExtensionInit();
 	const fetchModeConfig = resolveFetchModeConfig(initConfig);
+	const toolActivation = initConfig.toolActivation ?? "dynamic";
+	if (toolActivation !== "dynamic" && toolActivation !== "eager") {
+		throw new Error(`toolActivation in ${WEB_SEARCH_CONFIG_PATH} must be "dynamic" or "eager"`);
+	}
 	const allowedSearchProviders = initConfig.webSearch?.allowedProviders === undefined ? RESOLVED_SEARCH_PROVIDERS : getAllowedSearchProviders();
 	const allEligibleProviders = allowedSearchProviders.filter(provider => ALL_SEARCH_PROVIDERS.includes(provider));
 	const allExcludedProviders = allowedSearchProviders.filter(provider => !ALL_SEARCH_PROVIDERS.includes(provider));
@@ -3266,7 +3271,7 @@ export default function (pi: ExtensionAPI) {
 		...(fetchContentEnabled ? [{ name: toolNames.fetchContent, capability: "fetch" as const }] : []),
 		...(getSearchContentEnabled ? [{ name: toolNames.getSearchContent, capability: "stored-content" as const }] : []),
 	];
-	registerWebToolActivation(pi, activationTools);
+	if (toolActivation === "dynamic") registerWebToolActivation(pi, activationTools);
 
 	if (isCommandEnabled(initConfig, "websearch")) pi.registerCommand("websearch", {
 		description: "Open web search curator",

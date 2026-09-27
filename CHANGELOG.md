@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Added
+
+- Set `"toolActivation": "eager"` in `web-search.json` to skip `web_enable` and keep every enabled web tool available from the first request. The `web_enable` guidance now tells the model to call it first whenever current, external, or linked information could help. Thanks to [@ackalker](https://github.com/ackalker) for [issue #458](https://github.com/nicobailon/pi-web-access/issues/458).
+
 ### Fixed
 
 - Dynamic tool activation now checks the running Pi instead of the `@earendil-works/pi-coding-agent` version installed beside the extension, so a managed install that still carries an older peer keeps `web_enable`. Pi 0.86.0, which added transcript-backed tool changes, is now the minimum. Thanks to [@PhrZer](https://github.com/PhrZer) for [PR #456](https://github.com/nicobailon/pi-web-access/pull/456) and [@nguyenchiencong](https://github.com/nguyenchiencong) for [issue #444](https://github.com/nicobailon/pi-web-access/issues/444).
