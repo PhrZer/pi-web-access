@@ -1,4 +1,6 @@
 import { buildSessionContext, VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { existsSync, readFileSync, realpathSync } from "node:fs";
+import { dirname, join } from "node:path";
 import { Type } from "typebox";
 
 export type WebCapability = "search" | "source-check" | "fetch" | "stored-content";
@@ -9,6 +11,7 @@ export interface WebActivationTool {
 }
 
 const LOADER_NAME = "web_enable";
+const PI_PACKAGE_NAME = "@earendil-works/pi-coding-agent";
 const CAPABILITY_LABELS: Record<WebCapability, string> = {
 	search: "web search",
 	"source-check": "source checking",
@@ -16,11 +19,63 @@ const CAPABILITY_LABELS: Record<WebCapability, string> = {
 	"stored-content": "stored-result retrieval",
 };
 
-function supportsDynamicTools(pi: ExtensionAPI): boolean {
-	if (typeof pi.getAllTools !== "function" || typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") return false;
-	// Read the running Pi's version: global and binary installs have no Pi package on disk to resolve.
-	const [major, minor, patch] = String(VERSION).split(".").map(part => Number.parseInt(part, 10));
-	return major > 0 || minor > 86 || minor === 86 && patch >= 1;
+function piVersionFrom(root: string | undefined): string | undefined {
+	if (!root) return undefined;
+	try {
+		const manifest = JSON.parse(readFileSync(join(root, "package.json"), "utf8"));
+		return manifest?.name === PI_PACKAGE_NAME && typeof manifest.version === "string" ? manifest.version : undefined;
+	} catch {
+		return undefined;
+	}
+}
+
+declare const PI_BUNDLED_NODE: boolean | undefined;
+
+/** Compiled and bundled hosts keep the Pi API in memory instead of on disk. */
+function hostApiInMemory(): boolean {
+	if (typeof (process.versions as { bun?: string }).bun === "string") return true;
+	if ((process as { features?: { sea?: boolean } }).features?.sea === true) return true;
+	return typeof PI_BUNDLED_NODE !== "undefined" && PI_BUNDLED_NODE === true;
+}
+
+/**
+ * Version of the Pi installation running this extension. The package installed next to
+ * this extension is not authoritative: a managed install can keep an older
+ * `@earendil-works/*` peer beside it, and a static import resolves to that copy before
+ * the host's loader aliases apply. Walk up from the running entry point instead, accept
+ * the `PI_PACKAGE_DIR` override, and read `VERSION` only from an in-memory host module.
+ */
+function runningPiVersion(): string | undefined {
+	const entry = process.argv[1];
+	if (entry) {
+		try {
+			let directory = dirname(realpathSync(entry));
+			while (directory !== dirname(directory)) {
+				if (existsSync(join(directory, "package.json"))) {
+					const version = piVersionFrom(directory);
+					if (version) return version;
+				}
+				directory = dirname(directory);
+			}
+		} catch {
+			// Compiled hosts run a virtual entry point; the in-memory module covers them.
+		}
+	}
+	const override = piVersionFrom(process.env.PI_PACKAGE_DIR?.trim());
+	if (override) return override;
+	// A plain Node host whose entry point cannot be identified stays unverified rather
+	// than reading a version from the package beside the extension.
+	return hostApiInMemory() && typeof VERSION === "string" ? VERSION : undefined;
+}
+
+function unsupportedDynamicToolsReason(pi: ExtensionAPI): string | undefined {
+	if (typeof pi.getAllTools !== "function" || typeof pi.getActiveTools !== "function" || typeof pi.setActiveTools !== "function") {
+		return "requires Pi 0.86.1 or newer";
+	}
+	const version = runningPiVersion();
+	if (version === undefined) return "could not verify the running Pi installation";
+	const [major, minor, patch] = version.split(".").map(part => Number.parseInt(part, 10));
+	return major > 0 || minor > 86 || minor === 86 && patch >= 1 ? undefined : `requires Pi 0.86.1 or newer (running ${version})`;
 }
 
 function hasToolDeclarations(messages: unknown[]): boolean {
@@ -42,8 +97,9 @@ function currentTranscriptToolNames(messages: unknown[]): string[] {
 
 export function registerWebToolActivation(pi: ExtensionAPI, tools: ReadonlyArray<WebActivationTool>): void {
 	if (tools.length === 0) return;
-	if (!supportsDynamicTools(pi)) {
-		console.warn(`[pi-web-access] Dynamic tool activation requires Pi 0.86.1 or newer (running ${VERSION}); web tools remain eagerly available.`);
+	const unsupportedReason = unsupportedDynamicToolsReason(pi);
+	if (unsupportedReason) {
+		console.warn(`[pi-web-access] Dynamic tool activation ${unsupportedReason}; web tools remain eagerly available.`);
 		return;
 	}
 	const names = tools.map(tool => tool.name);

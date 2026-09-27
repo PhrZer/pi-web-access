@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Fixed
+
+- Dynamic tool activation now reads the Pi version from the running installation instead of the `@earendil-works/*` package installed beside the extension, so a managed install that still carries an older auto-installed peer keeps `web_enable`.
+
 ## [0.32.0] - 2026-09-26
 
 ### Highlights
