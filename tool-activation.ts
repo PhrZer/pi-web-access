@@ -1,6 +1,6 @@
-import { buildSessionContext, VERSION, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { buildSessionContext, type ExtensionAPI, type ExtensionContext } from "@earendil-works/pi-coding-agent";
 import { existsSync, readFileSync, realpathSync } from "node:fs";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import { Type } from "typebox";
 
 export type WebCapability = "search" | "source-check" | "fetch" | "stored-content";
@@ -29,21 +29,39 @@ function piVersionFrom(root: string | undefined): string | undefined {
 	}
 }
 
-declare const PI_BUNDLED_NODE: boolean | undefined;
-
-/** Compiled and bundled hosts keep the Pi API in memory instead of on disk. */
-function hostApiInMemory(): boolean {
-	if (typeof (process.versions as { bun?: string }).bun === "string") return true;
-	if ((process as { features?: { sea?: boolean } }).features?.sea === true) return true;
-	return typeof PI_BUNDLED_NODE !== "undefined" && PI_BUNDLED_NODE === true;
+/**
+ * Compiled hosts (Bun, Node single-executable) ship the Pi manifest beside the
+ * executable or in a `share/pi-coding-agent` directory next to it. Reading the manifest
+ * here avoids the imported `VERSION` export, which resolves to the package installed
+ * beside this extension before the host's loader aliases apply.
+ */
+function compiledHostVersion(): string | undefined {
+	const bun = typeof (process.versions as { bun?: string }).bun === "string";
+	const sea = (process as { features?: { sea?: boolean } }).features?.sea === true;
+	if (!bun && !sea) return undefined;
+	let imagePath = process.execPath;
+	try {
+		imagePath = realpathSync(imagePath);
+	} catch {
+		// A renamed or unreadable image still has a usable directory.
+	}
+	const imageDir = dirname(imagePath);
+	for (const root of [imageDir, resolve(imageDir, "..", "share", "pi-coding-agent")]) {
+		const version = piVersionFrom(root);
+		if (version) return version;
+	}
+	return undefined;
 }
 
 /**
- * Version of the Pi installation running this extension. The package installed next to
- * this extension is not authoritative: a managed install can keep an older
- * `@earendil-works/*` peer beside it, and a static import resolves to that copy before
- * the host's loader aliases apply. Walk up from the running entry point instead, accept
- * the `PI_PACKAGE_DIR` override, and read `VERSION` only from an in-memory host module.
+ * Version of the Pi installation running this extension.
+ *
+ * The package installed next to this extension is never authoritative: a managed install
+ * can keep an older `@earendil-works/*` peer beside it, and a static import resolves to
+ * that copy before the host's loader aliases apply. Walk up from the running entry point,
+ * accept the `PI_PACKAGE_DIR` override, and fall back to the executable layout for
+ * compiled hosts. An unverifiable host stays unverified rather than reading a version
+ * from the package beside the extension.
  */
 function runningPiVersion(): string | undefined {
 	const entry = process.argv[1];
@@ -63,9 +81,7 @@ function runningPiVersion(): string | undefined {
 	}
 	const override = piVersionFrom(process.env.PI_PACKAGE_DIR?.trim());
 	if (override) return override;
-	// A plain Node host whose entry point cannot be identified stays unverified rather
-	// than reading a version from the package beside the extension.
-	return hostApiInMemory() && typeof VERSION === "string" ? VERSION : undefined;
+	return compiledHostVersion();
 }
 
 function unsupportedDynamicToolsReason(pi: ExtensionAPI): string | undefined {

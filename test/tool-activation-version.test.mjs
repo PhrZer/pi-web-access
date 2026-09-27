@@ -43,10 +43,13 @@ function fakeHostPackage(version) {
 	return root;
 }
 
-function childScript({ messages, hook, embedded }) {
+function childScript({ messages, hook, compiledHost }) {
 	return `
 		${hook ?? ""}
-		${embedded ? "globalThis.PI_BUNDLED_NODE = true;" : ""}
+		${compiledHost ? `
+		process.versions.bun = "1.9.9";
+		Object.defineProperty(process, "execPath", { value: ${JSON.stringify(compiledHost.execPath)}, configurable: true, writable: true });
+		` : ""}
 		const warnings = [];
 		const originalWarn = console.warn;
 		console.warn = (...args) => warnings.push(args.map(String).join(" "));
@@ -75,7 +78,7 @@ function childScript({ messages, hook, embedded }) {
 	`;
 }
 
-function run({ messages = [], hook = "", embedded = false, hostVersion, entryPointVersion } = {}) {
+function run({ messages = [], hook = "", compiledHost, hostVersion, entryPointVersion } = {}) {
 	const root = mkdtempSync(join(tmpdir(), "pi-web-access-version-"));
 	writeFileSync(join(root, "web-search.json"), JSON.stringify({}), "utf8");
 	const env = {
@@ -87,7 +90,7 @@ function run({ messages = [], hook = "", embedded = false, hostVersion, entryPoi
 	};
 	if (hostVersion) env.PI_PACKAGE_DIR = fakeHostPackage(hostVersion);
 	else delete env.PI_PACKAGE_DIR;
-	const script = childScript({ messages, hook, embedded });
+	const script = childScript({ messages, hook, compiledHost });
 	let child;
 	if (entryPointVersion) {
 		// Run from inside a fake Pi installation so process.argv[1] identifies the host.
@@ -140,14 +143,32 @@ test("an unverifiable host keeps web tools eager", () => {
 	assert.ok(state.warnings.some(message => /could not verify the running Pi installation/.test(message)), JSON.stringify(state.warnings));
 });
 
-test("embedded hosts read the in-memory VERSION export", () => {
-	const supported = run({ embedded: true, hook: stalePiImportHook("0.87.1") });
+test("compiled hosts read the Pi manifest shipped beside the executable", () => {
+	const adjacent = mkdtempSync(join(tmpdir(), "pi-web-access-image-"));
+	writeFileSync(join(adjacent, "pi"), "");
+	writeFileSync(join(adjacent, "package.json"), JSON.stringify({ name: "@earendil-works/pi-coding-agent", version: "0.87.1" }));
+	const supported = run({ compiledHost: { execPath: join(adjacent, "pi") } });
 	assert.deepEqual(supported.warnings, []);
 	assert.ok(supported.active.includes("web_enable"), `expected web_enable, got ${supported.active.join(", ")}`);
 
-	const unsupported = run({ embedded: true, hook: stalePiImportHook("0.86.0") });
+	const shared = mkdtempSync(join(tmpdir(), "pi-web-access-image-"));
+	const imageDir = join(shared, "bin");
+	mkdirSync(imageDir, { recursive: true });
+	writeFileSync(join(imageDir, "pi"), "");
+	const shareDir = join(shared, "share", "pi-coding-agent");
+	mkdirSync(shareDir, { recursive: true });
+	writeFileSync(join(shareDir, "package.json"), JSON.stringify({ name: "@earendil-works/pi-coding-agent", version: "0.86.0" }));
+	const unsupported = run({ compiledHost: { execPath: join(imageDir, "pi") } });
 	assert.equal(unsupported.active.includes("web_enable"), false);
 	assert.match(unsupported.warnings[0], /running 0\.86\.0/);
+});
+
+test("a compiled host without a shipped manifest stays unverified", () => {
+	const bare = mkdtempSync(join(tmpdir(), "pi-web-access-image-"));
+	writeFileSync(join(bare, "pi"), "");
+	const state = run({ compiledHost: { execPath: join(bare, "pi") } });
+	assert.equal(state.active.includes("web_enable"), false, `expected no web_enable, got ${state.active.join(", ")}`);
+	assert.ok(state.warnings.some(message => /could not verify the running Pi installation/.test(message)), JSON.stringify(state.warnings));
 });
 
 test("a warm session restores exactly the tools it recorded", () => {
