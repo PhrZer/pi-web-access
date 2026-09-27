@@ -2,13 +2,10 @@ import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { join } from "node:path";
 import { test } from "node:test";
 
 const indexUrl = new URL("../index.ts", import.meta.url).href;
-// The repository's own Pi SDK stands in for a running installation.
-const sdkPackageDir = dirname(dirname(fileURLToPath(import.meta.resolve("@earendil-works/pi-coding-agent"))));
 
 function run(config = {}, options = {}) {
 	const root = mkdtempSync(join(tmpdir(), "pi-web-access-activation-"));
@@ -23,7 +20,7 @@ function run(config = {}, options = {}) {
 			const pi = {
 				registerTool(tool) { tools.set(tool.name, tool); if (!options.unavailable?.includes(tool.name)) active.push(tool.name); },
 				registerCommand() {}, registerShortcut() {},
-				on(event, handler) { const list = handlers.get(event) ?? []; list.push(handler); handlers.set(event, list); },
+				on(event, handler) { const list = handlers.get(event) ?? []; list.push(handler); handlers.set(event, list); return () => {}; },
 				getAllTools() { return [...tools.values()].filter(tool => !options.unavailable?.includes(tool.name)); },
 				getActiveTools() { return [...active]; },
 				setActiveTools(names) {
@@ -50,7 +47,7 @@ function run(config = {}, options = {}) {
 			}));
 		`,
 		encoding: "utf8",
-		env: { ...process.env, PI_CODING_AGENT_DIR: root, PI_PACKAGE_DIR: sdkPackageDir, XDG_CONFIG_HOME: "", HOME: join(root, "home"), USERPROFILE: join(root, "home") },
+		env: { ...process.env, PI_CODING_AGENT_DIR: root, XDG_CONFIG_HOME: "", HOME: join(root, "home"), USERPROFILE: join(root, "home") },
 	});
 	assert.equal(child.status, 0, child.stderr);
 	return JSON.parse(child.stdout);

@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 
-- Dynamic tool activation now reads the Pi version from the running installation instead of the `@earendil-works/*` package installed beside the extension, so a managed install that still carries an older auto-installed peer keeps `web_enable`.
+- Dynamic tool activation now checks the running Pi instead of the `@earendil-works/pi-coding-agent` version installed beside the extension, so a managed install that still carries an older peer keeps `web_enable`. Pi 0.86.0, which added transcript-backed tool changes, is now the minimum. Thanks to [@PhrZer](https://github.com/PhrZer) for [PR #456](https://github.com/nicobailon/pi-web-access/pull/456) and [@nguyenchiencong](https://github.com/nguyenchiencong) for [issue #444](https://github.com/nicobailon/pi-web-access/issues/444).
 
 ## [0.32.0] - 2026-09-26
 
